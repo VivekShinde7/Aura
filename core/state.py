@@ -14,6 +14,12 @@ class Document(BaseModel):
     raw_content: str
     source: str
 
+class ExtractedEntity(BaseModel):
+    """Represents a single entity extracted from a document."""
+    name: str
+    type: str # e.g., 'Person', 'Company', 'Location'
+    source_document_url: str # To trace back where it was found
+
 class InvestigationState(TypedDict):
     """
     Represents the shared state of our investigation workflow.
@@ -21,4 +27,4 @@ class InvestigationState(TypedDict):
     """
     subject: SubjectProfile
     documents: List[Document]
-    # We will add more fields here later, like 'extracted_entities', etc.
+    extracted_entities: List[ExtractedEntity]

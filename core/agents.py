@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from .state import InvestigationState, Document
+from .state import InvestigationState, Document, ExtractedE
 
 class SearchResults(BaseModel):
     """Structured data model for search results."""

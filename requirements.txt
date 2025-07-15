@@ -1,0 +1,5 @@
+langchain 
+langchain-mistralai 
+langgraph 
+python-dotenv 
+pydantic

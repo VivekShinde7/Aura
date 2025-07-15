@@ -3,3 +3,4 @@ langchain-mistralai
 langgraph 
 python-dotenv 
 pydantic
+langchain-google-genai

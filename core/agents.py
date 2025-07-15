@@ -4,15 +4,16 @@ from pydantic import BaseModel, Field
 from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from .state import InvestigationState, Document, ExtractedE
+from .state import InvestigationState, Document, ExtractedEntity
 
 class SearchResults(BaseModel):
     """Structured data model for search results."""
     results: List[Document] = Field(description="A list of relevant documents found from the web search.")
 
-# ... (keep all existing imports and Pydantic models)
+class Entities(BaseModel):
+    """A list of entities found in a body of text."""
+    entities: List[ExtractedEntity]
 
-# --- The FINAL Production-Ready Web Search Agent ---
 def web_search_agent(state: InvestigationState) -> InvestigationState:
     """
     A production-ready agent that uses a two-phase search strategy.
@@ -95,3 +96,47 @@ def web_search_agent(state: InvestigationState) -> InvestigationState:
 
     print(f"Total unique documents found across all phases: {len(all_found_documents)}")
     return {"documents": all_found_documents}
+
+def entity_extraction_agent(state: InvestigationState) -> InvestigationState:
+    """
+    Extracts entities (People, Companies, Locations) from the documents' raw content.
+    """
+    print("---AGENT: Entity Extraction Agent---")
+    
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+    # Important: We tell the model to structure its output according to our Pydantic class
+    structured_llm = llm.with_structured_output(Entities)
+    
+    all_extracted_entities = []
+    documents_to_process = state['documents']
+
+    print(f"Processing {len(documents_to_process)} documents for entities...")
+
+    # We process each document individually to keep the context small and focused
+    for i, doc in enumerate(documents_to_process):
+        print(f"  - ({i+1}/{len(documents_to_process)}) Extracting from: {doc.title[:50]}...")
+        
+        prompt_template = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert data analyst. Your task is to extract all named entities "
+                       "(specifically People, Companies, and Locations) from the provided text. For each entity, provide its name, "
+                       "its type, and the source document URL it was found in. Do not extract the main subject of the investigation, only other entities mentioned."),
+            ("human", f"Please extract entities from the following text. The source URL is {doc.url}. "
+                      f"The main subject is '{state['subject'].name}', do not include them in the output.\n\nText:\n---\n{doc.raw_content}")
+        ])
+
+        final_prompt = prompt_template.format_prompt()
+        
+        try:
+            response = structured_llm.invoke(final_prompt)
+            # Add the found entities to our master list
+            if response.entities:
+                all_extracted_entities.extend(response.entities)
+                print(f"- Found {len(response.entities)} entities in this document.")
+        except Exception as e:
+            print(f"- Error extracting entities from {doc.url}: {e}")
+            continue
+
+    print(f"Extracted a total of {len(all_extracted_entities)} entities across all documents.")
+    
+    # Return the update to the state
+    return {"extracted_entities": all_extracted_entities}

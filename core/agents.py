@@ -1,10 +1,15 @@
+from collections import defaultdict
 import os
+import time
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from .state import InvestigationState, Document, ExtractedEntity
+from .state import InvestigationState, Document, ExtractedEntity, SummarizedEntity
+from constants import MAX_DOCS_TO_PROCESS, API_CALL_DELAY_SECONDS
+
+
 
 class SearchResults(BaseModel):
     """Structured data model for search results."""
@@ -77,6 +82,11 @@ def web_search_agent(state: InvestigationState) -> InvestigationState:
         }
 
         for angle, query in search_angles.items():
+
+            # --- ADD A DELAY BEFORE EACH DEEP SEARCH CALL ---
+            print(f"Waiting {API_CALL_DELAY_SECONDS} seconds before next API call...")
+            time.sleep(API_CALL_DELAY_SECONDS)
+
             print(f"  - Executing deep search on angle '{angle}'")
             # Same prompt logic as before
             deep_prompt = prompt_template.format_prompt(search_query=query)
@@ -110,11 +120,13 @@ def entity_extraction_agent(state: InvestigationState) -> InvestigationState:
     all_extracted_entities = []
     documents_to_process = state['documents']
 
-    print(f"Processing {len(documents_to_process)} documents for entities...")
+    print(f"Found {len(documents_to_process)} documents. Processing a maximum of {MAX_DOCS_TO_PROCESS} for this test run.")
+    # We slice the list to only process the first N documents
+    limited_documents = documents_to_process[:MAX_DOCS_TO_PROCESS]
 
     # We process each document individually to keep the context small and focused
-    for i, doc in enumerate(documents_to_process):
-        print(f"  - ({i+1}/{len(documents_to_process)}) Extracting from: {doc.title[:50]}...")
+    for i, doc in enumerate(limited_documents):
+        print(f"  - ({i+1}/{len(limited_documents)}) Extracting from: {doc.title[:50]}...")
         
         prompt_template = ChatPromptTemplate.from_messages([
             ("system", "You are an expert data analyst. Your task is to extract all named entities "
@@ -140,3 +152,40 @@ def entity_extraction_agent(state: InvestigationState) -> InvestigationState:
     
     # Return the update to the state
     return {"extracted_entities": all_extracted_entities}
+
+def summarize_entities_agent(state: InvestigationState) -> InvestigationState:
+    """
+    Deduplicates and aggregates the extracted entities.
+    """
+    print("---AGENT: Entity Summarization Agent---")
+    
+    raw_entities = state['extracted_entities']
+    
+    # Use a defaultdict to easily group entities by name and type
+    # The key will be a tuple: (name, type)
+    aggregated_data = defaultdict(lambda: {"count": 0, "urls": set()})
+    
+    for entity in raw_entities:
+        key = (entity.name.strip().lower(), entity.type.lower())
+        aggregated_data[key]["count"] += 1
+        aggregated_data[key]["urls"].add(entity.source_document_url)
+
+    # Convert the aggregated data into our Pydantic model
+    summarized_list = []
+    for (name, entity_type), data in aggregated_data.items():
+        summarized_list.append(
+            SummarizedEntity(
+                name=name.title(), # Capitalize for clean display
+                type=entity_type.title(),
+                count=data["count"],
+                source_urls=list(data["urls"])
+            )
+        )
+        
+    # Sort the list by count, so the most mentioned entities are at the top
+    summarized_list.sort(key=lambda x: x.count, reverse=True)
+    
+    print(f"Summarized {len(raw_entities)} raw entities into {len(summarized_list)} unique entities.")
+
+    state['summarized_entities'] = summarized_list
+    return state

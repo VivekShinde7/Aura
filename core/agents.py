@@ -6,10 +6,8 @@ from pydantic import BaseModel, Field
 from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from .state import InvestigationState, Document, ExtractedEntity, SummarizedEntity
+from .state import InvestigationState, Document, ExtractedEntity, SummarizedEntity, Relationship, Risk
 from constants import MAX_DOCS_TO_PROCESS, API_CALL_DELAY_SECONDS
-
-
 
 class SearchResults(BaseModel):
     """Structured data model for search results."""
@@ -18,6 +16,10 @@ class SearchResults(BaseModel):
 class Entities(BaseModel):
     """A list of entities found in a body of text."""
     entities: List[ExtractedEntity]
+
+class Relationships(BaseModel):
+    """A list of relationships found in a body of text."""
+    relationships: List[Relationship]
 
 def web_search_agent(state: InvestigationState) -> InvestigationState:
     """
@@ -188,4 +190,94 @@ def summarize_entities_agent(state: InvestigationState) -> InvestigationState:
     print(f"Summarized {len(raw_entities)} raw entities into {len(summarized_list)} unique entities.")
 
     state['summarized_entities'] = summarized_list
+    return state
+
+def relationship_extraction_agent(state: InvestigationState) -> InvestigationState:
+    """
+    Extracts relationships between the summarized entities from the document text.
+    """
+    print("---AGENT: Relationship Extraction Agent---")
+    
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+    structured_llm = llm.with_structured_output(Relationships)
+    
+    all_relationships = []
+    documents_to_process = state['documents']
+    # We use the clean, unique list of entity names for our search
+    entity_names = [e.name for e in state['summarized_entities']]
+    # Also include the main subject
+    entity_names.append(state['subject'].name)
+
+    print(f"Processing {len(documents_to_process)} documents for relationships between {len(entity_names)} unique entities...")
+
+    for i, doc in enumerate(documents_to_process):
+        print(f"  - ({i+1}/{len(documents_to_process)}) Analyzing: {doc.title[:50]}...")
+        
+        # This is a very complex prompt. It asks the model to act like a graph database.
+        prompt_template = ChatPromptTemplate.from_messages([
+            ("system", "You are a highly advanced AI system that builds knowledge graphs. Your task is to identify "
+                       "directed relationships between a given list of entities from a body of text. "
+                       "Relationships should be described as a triple: (Source Entity, Relationship Type, Target Entity). "
+                       "Example Relationship Types: IS_CEO_OF, FOUNDED, ACQUIRED, SUED, PARTNERED_WITH, INVESTED_IN. "
+                       "Focus only on explicit relationships mentioned in the text. "
+                       "The Source URL is the source of the document you are analyzing."),
+            ("human", "Here is the list of known entities: {entities}. "
+                      "Please extract all relationships between these entities from the following text. "
+                      "The source URL for these relationships is {source_url}.\n\nText:\n---\n{text}")
+        ])
+
+        final_prompt = prompt_template.format_prompt(
+            entities=entity_names, 
+            source_url=doc.url, 
+            text=doc.raw_content
+        )
+        
+        try:
+            response = structured_llm.invoke(final_prompt)
+            if response.relationships:
+                all_relationships.extend(response.relationships)
+                print(f"    - Found {len(response.relationships)} relationships in this document.")
+        except Exception as e:
+            print(f"    - Error extracting relationships from {doc.url}: {e}")
+            continue
+
+    print(f"Extracted a total of {len(all_relationships)} relationships.")
+    
+    state['relationships'] = all_relationships
+    return state
+
+def risk_analysis_agent(state: InvestigationState) -> InvestigationState:
+    """
+    Scans documents for keywords indicating potential risk.
+    """
+    print("---AGENT: Risk Analysis Agent---")
+    
+    # Define keywords for different risk categories
+    risk_keywords = {
+        "Legal": ["lawsuit", "sued", "legal action", "sec investigation", "settlement", "court"],
+        "Financial": ["bankruptcy", "debt", "financial issues", "struggles"],
+        "Reputational": ["controversy", "scandal", "criticism", "complaint", "allegations", "antisemitic"]
+    }
+    
+    found_risks = []
+    documents_to_process = state['documents']
+    print(f"Scanning {len(documents_to_process)} documents for risk keywords...")
+    
+    for doc in documents_to_process:
+        content_lower = doc.raw_content.lower()
+        for risk_type, keywords in risk_keywords.items():
+            for keyword in keywords:
+                if keyword in content_lower:
+                    # Found a risk, create a Risk object
+                    risk = Risk(
+                        risk_type=risk_type,
+                        details=f"Document contains keyword: '{keyword}'",
+                        source_document_url=doc.url
+                    )
+                    found_risks.append(risk)
+                    # Break after finding the first keyword in a category to avoid duplicate risk entries for the same doc
+                    break 
+    
+    print(f"Found {len(found_risks)} potential risk signals.")
+    state['risks'] = found_risks
     return state

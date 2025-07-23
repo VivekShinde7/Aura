@@ -27,6 +27,18 @@ class SummarizedEntity(BaseModel):
     count: int # How many times it was found
     source_urls: List[str] # List of all unique URLs where it was mentioned
 
+class Relationship(BaseModel):
+    """Represents a directed relationship between two entities."""
+    source_entity: str
+    target_entity: str
+    relationship_type: str
+    source_document_url: str # Where was this relationship described?
+
+class Risk(BaseModel):
+    """Represents a potential risk found in a document."""
+    risk_type: str # e.g., 'Legal', 'Financial', 'Reputational'
+    details: str
+    source_document_url: str
 
 class InvestigationState(TypedDict):
     """
@@ -36,4 +48,6 @@ class InvestigationState(TypedDict):
     subject: SubjectProfile
     documents: List[Document]
     extracted_entities: List[ExtractedEntity]
-    summarized_entities: List[SummarizedEntity] 
+    summarized_entities: List[SummarizedEntity]
+    relationships: List[Relationship]
+    risks: List[Risk]
